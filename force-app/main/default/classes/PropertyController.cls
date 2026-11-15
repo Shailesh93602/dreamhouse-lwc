@@ -41,7 +41,7 @@ public with sharing class PropertyController {
                 (Name LIKE :searchPattern
                 OR City__c LIKE :searchPattern
                 OR Tags__c LIKE :searchPattern)
-                AND Price__c <= :safeMaxPrice
+                AND Price__c < :safeMaxPrice
                 AND Beds__c >= :safeMinBedrooms
                 AND Baths__c >= :safeMinBathrooms
         ];
@@ -64,7 +64,7 @@ public with sharing class PropertyController {
                 (Name LIKE :searchPattern
                 OR City__c LIKE :searchPattern
                 OR Tags__c LIKE :searchPattern)
-                AND Price__c <= :safeMaxPrice
+                AND Price__c < :safeMaxPrice
                 AND Beds__c >= :safeMinBedrooms
                 AND Baths__c >= :safeMinBathrooms
             WITH USER_MODE
