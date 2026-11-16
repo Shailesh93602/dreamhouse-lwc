@@ -1,0 +1,10 @@
+{
+    "server": "https://deploy-all-features.tsportalserver.preview.contextqa.com",
+    "components": {
+        "force-app/main/default/lwc/propertyFilter/": {
+            "test_plan_id": 55,
+            "test_case_ids": [540, 541],
+            "why": "Max Price slider: found by label (540) and by data-id (541)"
+        }
+    }
+}
