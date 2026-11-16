@@ -62,7 +62,10 @@ jobs:
                   overall=0
                   for plan in $PLANS; do
                       echo "Starting ContextQA test plan $plan"
-                      trigger=$(curl -sS --fail-with-body -m 60 -H "token: ${CONTEXTQA_API_TOKEN}" "$SERVER/test_plans/$plan/execution")
+                      if ! trigger=$(curl -sS --fail-with-body -m 60 -H "token: ${CONTEXTQA_API_TOKEN}" "$SERVER/test_plans/$plan/execution"); then
+                          echo "::error::ContextQA did not start plan $plan. It answers HTTP 500 for a missing or invalid token: check CONTEXTQA_API_TOKEN."
+                          exit 1
+                      fi
                       run_id=$(echo "$trigger" | jq -r '.id')
                       run_url=$(echo "$trigger" | jq -r '.url')
                       echo "Run $run_id: $run_url"
@@ -70,11 +73,17 @@ jobs:
                       status=""; res="{}"
                       for i in $(seq 1 80); do
                           sleep 30
-                          res=$(curl -sS --fail-with-body -m 60 -H "token: ${CONTEXTQA_API_TOKEN}" "$SERVER/test_plan_results/$run_id/results")
+                          if ! res=$(curl -sS --fail-with-body -m 60 -H "token: ${CONTEXTQA_API_TOKEN}" "$SERVER/test_plan_results/$run_id/results"); then
+                              echo "::warning::Poll $i for run $run_id failed; retrying."
+                              res="{}"; continue
+                          fi
                           status=$(echo "$res" | jq -r '.status')
                           echo "  poll $i: status=$status"
                           [ "$status" = "STATUS_COMPLETED" ] && break
                       done
+                      if [ "$status" != "STATUS_COMPLETED" ]; then
+                          echo "::error::Plan $plan run $run_id did not finish within 40 minutes (last status: $status)."
+                      fi
                       result=$(echo "$res" | jq -r '.result')
                       counts=$(echo "$res" | jq -r '"passed \(.passedCount) / failed \(.failedCount) / total \(.totalCount)"')
                       echo "Plan $plan: $result ($counts)"
