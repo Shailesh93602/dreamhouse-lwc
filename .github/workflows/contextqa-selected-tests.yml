@@ -1,0 +1,84 @@
+# Runs only the ContextQA tests mapped to the components a PR changes.
+# Map: .github/contextqa-test-map.json (component path prefix -> ContextQA test plan).
+# Needs repo secret CONTEXTQA_API_TOKEN (ContextQA CI token from GET /api/public/token/ci).
+name: ContextQA selected tests
+
+on:
+    pull_request:
+        paths:
+            - 'force-app/**'
+            - '.github/contextqa-test-map.json'
+            - '.github/workflows/contextqa-selected-tests.yml'
+
+permissions:
+    contents: read
+
+jobs:
+    contextqa:
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Pick ContextQA test plans for the changed components
+              id: pick
+              env:
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+              run: |
+                  git diff --name-only "$BASE_SHA"...HEAD > changed.txt
+                  echo "Changed files:"; cat changed.txt
+                  python3 - <<'EOF'
+                  import json, os
+                  m = json.load(open(".github/contextqa-test-map.json"))
+                  changed = [l.strip() for l in open("changed.txt") if l.strip()]
+                  plans, lines = [], []
+                  for prefix, entry in m["components"].items():
+                      hits = [f for f in changed if f.startswith(prefix)]
+                      if hits and entry["test_plan_id"] not in plans:
+                          plans.append(entry["test_plan_id"])
+                          lines.append(f"- `{prefix}` -> plan {entry['test_plan_id']} (tests {entry['test_case_ids']})")
+                  with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                      out.write(f"plans={' '.join(map(str, plans))}\n")
+                      out.write(f"server={m['server']}\n")
+                  with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+                      s.write("### ContextQA selected tests\n")
+                      s.write("\n".join(lines) + "\n" if lines else "No mapped component changed; nothing to run.\n")
+                  EOF
+
+            - name: Run the selected ContextQA tests
+              if: steps.pick.outputs.plans != ''
+              env:
+                  CONTEXTQA_API_TOKEN: ${{ secrets.CONTEXTQA_API_TOKEN }}
+                  SERVER: ${{ steps.pick.outputs.server }}
+                  PLANS: ${{ steps.pick.outputs.plans }}
+              run: |
+                  set -euo pipefail
+                  if [ -z "${CONTEXTQA_API_TOKEN}" ]; then
+                      echo "::error::Repo secret CONTEXTQA_API_TOKEN is not set. Add the ContextQA CI token as that secret."
+                      exit 1
+                  fi
+                  overall=0
+                  for plan in $PLANS; do
+                      echo "Starting ContextQA test plan $plan"
+                      trigger=$(curl -sS --fail-with-body -m 60 -H "token: ${CONTEXTQA_API_TOKEN}" "$SERVER/test_plans/$plan/execution")
+                      run_id=$(echo "$trigger" | jq -r '.id')
+                      run_url=$(echo "$trigger" | jq -r '.url')
+                      echo "Run $run_id: $run_url"
+                      echo "- Plan $plan -> run [$run_id]($run_url)" >> "$GITHUB_STEP_SUMMARY"
+                      status=""; res="{}"
+                      for i in $(seq 1 80); do
+                          sleep 30
+                          res=$(curl -sS --fail-with-body -m 60 -H "token: ${CONTEXTQA_API_TOKEN}" "$SERVER/test_plan_results/$run_id/results")
+                          status=$(echo "$res" | jq -r '.status')
+                          echo "  poll $i: status=$status"
+                          [ "$status" = "STATUS_COMPLETED" ] && break
+                      done
+                      result=$(echo "$res" | jq -r '.result')
+                      counts=$(echo "$res" | jq -r '"passed \(.passedCount) / failed \(.failedCount) / total \(.totalCount)"')
+                      echo "Plan $plan: $result ($counts)"
+                      echo "  - result: **$result** ($counts)" >> "$GITHUB_STEP_SUMMARY"
+                      if [ "$status" != "STATUS_COMPLETED" ] || [ "$result" != "SUCCESS" ]; then overall=1; fi
+                  done
+                  exit $overall
